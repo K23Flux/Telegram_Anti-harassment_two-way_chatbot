@@ -5,6 +5,7 @@ from telegram.ext import Application
 from config import config
 from handlers import register_handlers
 from database.db_manager import DatabaseManager
+from services.error_notifier import error_handler
 from services.telegram_commands import register_bot_commands
 
 async def post_init(app: Application):
@@ -30,6 +31,7 @@ def main():
     app = Application.builder().token(config.BOT_TOKEN).post_init(post_init).build()
 
     register_handlers(app)
+    app.add_error_handler(error_handler)
 
     config.validate()
 

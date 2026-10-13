@@ -108,7 +108,6 @@ def _load_handler_registration(monkeypatch):
             "blacklist",
             "stats",
             "getid",
-            "panel",
         ],
     )
     user_module = _stub_module(
@@ -120,7 +119,7 @@ def _load_handler_registration(monkeypatch):
     admin_module = _stub_module(
         monkeypatch,
         "handlers.admin_handler",
-        ["handle_admin_edit", "handle_admin_reply"],
+        ["delete_command", "handle_admin_edit", "handle_admin_reply"],
     )
     handlers_module = importlib.import_module("handlers")
     return handlers_module, user_module, admin_module, command_module

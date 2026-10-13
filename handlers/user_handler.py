@@ -70,26 +70,14 @@ async def _handle_new_messages(updates, context: ContextTypes.DEFAULT_TYPE):
     message = update.effective_message
     user = update.effective_user
 
+    # 速率限制：超限的消息不转发，只在本轮第一次超限时提醒一次，不封禁
     is_over_limit, was_warned = await rate_limiter.check_user_rate_limit(user.id)
     if is_over_limit:
-        if was_warned:
-            await db.add_to_blacklist(
-                user.id,
-                reason="忽略速率限制警告，多次超出限制",
-                blocked_by=config.BOT_ID,
-                permanent=True,
-            )
-            await db.set_user_blacklist_strikes(user.id, 99)
-            await message.reply_text(
-                "您收到速率警告后仍然超出速率限制，已被永久封禁。\n\n"
-                "如有疑问请联系管理员。"
-            )
-        else:
+        if not was_warned:
             await rate_limiter.mark_user_warned(user.id)
             await message.reply_text(
-                "警告：您发送消息过于频繁，已超过速率限制。\n\n"
-                f"当前速率限制规则：每分钟最多 {config.MAX_MESSAGES_PER_MINUTE} 条消息。\n\n"
-                "请稍后再试。如果继续超出限制，您将被永久封禁。"
+                "你发得太快了，这条消息没有转发出去，接下来超出的也不会转发。\n"
+                f"每分钟最多 {config.MAX_MESSAGES_PER_MINUTE} 条，请稍等一会儿再发。"
             )
         return
 

@@ -67,16 +67,6 @@ async def get_user_by_thread_id(thread_id: int):
                 return dict(zip([col[0] for col in cursor.description], row))
             return None
 
-async def save_message(user_id: int, message_id: int, content: str, direction: str, media_type: str = None, media_file_id: str = None):
-    async with db_manager.get_connection() as db:
-        await db.execute('''
-            INSERT INTO messages
-            (user_id, message_id, content, direction, media_type, media_file_id)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (user_id, message_id, content, direction, media_type, media_file_id))
-        await db.commit()
-
-
 _MESSAGE_MAPPING_FIELDS = (
     'user_id',
     'user_chat_id',
@@ -269,24 +259,11 @@ async def remove_from_blacklist(user_id: int):
         await db.execute('DELETE FROM blacklist WHERE user_id = ?', (user_id,))
         await db.commit()
 
-async def get_blacklist():
-    async with db_manager.get_connection() as db:
-        async with db.execute('''
-            SELECT b.user_id, u.first_name, u.username, b.reason, b.blocked_at
-            FROM blacklist b
-            LEFT JOIN users u ON b.user_id = u.user_id
-            ORDER BY b.blocked_at DESC
-        ''') as cursor:
-            rows = await cursor.fetchall()
-            if not rows:
-                return []
-            cols = [description[0] for description in cursor.description]
-            return [dict(zip(cols, row)) for row in rows]
-
 async def get_blacklist_paginated(limit: int = 5, offset: int = 0):
     async with db_manager.get_connection() as db:
         async with db.execute('''
-            SELECT b.user_id, u.first_name, u.username, b.reason, b.blocked_at
+            SELECT b.user_id, u.first_name, u.last_name, u.username,
+                   b.reason, b.blocked_at, b.permanent
             FROM blacklist b
             LEFT JOIN users u ON b.user_id = u.user_id
             ORDER BY b.blocked_at DESC
@@ -348,28 +325,3 @@ async def get_all_users_paginated(limit: int = 5, offset: int = 0):
                 return []
             cols = [description[0] for description in cursor.description]
             return [dict(zip(cols, row)) for row in rows]
-
-async def get_blacklist_user_details(user_id: int):
-    async with db_manager.get_connection() as db:
-        async with db.execute('''
-            SELECT 
-                b.user_id,
-                u.first_name,
-                u.username,
-                u.last_name,
-                u.language_code,
-                u.is_blacklisted,
-                u.blacklist_strikes,
-                b.reason,
-                b.blocked_by,
-                b.blocked_at,
-                b.permanent
-            FROM blacklist b
-            LEFT JOIN users u ON b.user_id = u.user_id
-            WHERE b.user_id = ?
-        ''', (user_id,)) as cursor:
-            row = await cursor.fetchone()
-            if row:
-                cols = [description[0] for description in cursor.description]
-                return dict(zip(cols, row))
-            return None

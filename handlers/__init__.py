@@ -1,11 +1,12 @@
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters
-from .command_handler import start, help_command, block, unblock, blacklist, stats, getid, panel
+from .command_handler import start, help_command, block, unblock, blacklist, stats, getid
 from .user_handler import handle_edited_message, handle_message
 from .callback_handler import handle_callback
-from .admin_handler import handle_admin_edit, handle_admin_reply
+from .admin_handler import delete_command, handle_admin_edit, handle_admin_reply
 from config import config
 
 def register_handlers(app: Application):
+    """注册命令和消息处理器。命令必须排在转发处理器前面，否则会被当成普通消息转走。"""
     new_message = filters.UpdateType.MESSAGE
     app.add_handler(CommandHandler("getid", getid, filters=new_message))
     app.add_handler(CommandHandler(
@@ -36,14 +37,14 @@ def register_handlers(app: Application):
         admin_chat = filters.Chat(chat_id=config.FORUM_GROUP_ID)
         configured_admin = filters.User(user_id=config.ADMIN_IDS)
 
-        app.add_handler(CommandHandler(
-            "help",
-            help_command,
-            filters=new_message & filters.ChatType.PRIVATE,
-        ))
+        app.add_handler(CommandHandler("help", help_command, filters=new_message))
         app.add_handler(CommandHandler("block", block, filters=new_message))
         app.add_handler(CommandHandler("unblock", unblock, filters=new_message))
-        app.add_handler(CommandHandler("panel", panel, filters=new_message))
+        app.add_handler(CommandHandler(
+            "del",
+            delete_command,
+            filters=new_message & admin_chat & configured_admin,
+        ))
         app.add_handler(CommandHandler("blacklist", blacklist, filters=new_message))
         app.add_handler(CommandHandler("stats", stats, filters=new_message))
         
