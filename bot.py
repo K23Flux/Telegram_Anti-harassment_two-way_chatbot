@@ -20,6 +20,8 @@ def main():
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         level=logging.INFO
     )
+    # httpx 的 INFO 日志会把带 Bot Token 的完整请求地址打出来，而且每次轮询都打一条
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
     # Python 3.14 不再为主线程隐式创建事件循环，显式设置可兼容 PTB 的 run_polling。
     loop = asyncio.new_event_loop()
