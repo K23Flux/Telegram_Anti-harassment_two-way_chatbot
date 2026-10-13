@@ -6,14 +6,12 @@ from telegram.ext import ContextTypes
 from database import models as db
 from services.verification import create_verification, is_verification_pending, get_pending_verification_message
 from services.thread_manager import get_or_create_thread
-from services.gemini_service import gemini_service
 from services.media_group_buffer import (
     enqueue_message,
     has_active_queue,
     replace_buffered_update,
 )
 from services.message_relay import relay_media_group, relay_message, sync_edited_message
-from utils.media_converter import sticker_to_image
 from services.rate_limiter import rate_limiter
 from config import config
 
@@ -50,54 +48,6 @@ async def _resend_message(update: Update, context: ContextTypes.DEFAULT_TYPE, th
     )
 
 
-async def _message_passes_moderation(
-    message,
-    context: ContextTypes.DEFAULT_TYPE,
-    user_id: int,
-    rejection_action: str = "转发",
-) -> bool:
-    if await db.is_exempted(user_id):
-        return True
-
-    image_bytes = None
-    if message.photo:
-        photo_file = await message.photo[-1].get_file()
-        image_bytes = await photo_file.download_as_bytearray()
-    elif message.sticker and not message.sticker.is_animated and not message.sticker.is_video:
-        sticker_file = await message.sticker.get_file()
-        sticker_bytes = await sticker_file.download_as_bytearray()
-        image_bytes = await sticker_to_image(sticker_bytes)
-
-    analyzing_message = await context.bot.send_message(
-        chat_id=message.chat_id,
-        text="正在通过AI分析内容是否包含垃圾信息...",
-        reply_to_message_id=message.message_id,
-    )
-    analysis_result = await gemini_service.analyze_message(message, image_bytes)
-    if analysis_result.get("is_spam"):
-        await db.save_filtered_message(
-            user_id=user_id,
-            message_id=message.message_id,
-            content=message.text or message.caption,
-            reason=analysis_result.get("reason"),
-            media_type=message.photo and "photo" or message.sticker and "sticker",
-            media_file_id=(
-                message.photo and message.photo[-1].file_id
-                or message.sticker and message.sticker.file_id
-            ),
-        )
-        reason = analysis_result.get("reason", "未提供原因")
-        await analyzing_message.edit_text(
-            f"您的消息已被系统拦截，因此未{rejection_action}\n\n原因：{reason}"
-        )
-        return False
-
-    try:
-        await analyzing_message.delete()
-    except Exception:
-        logger.exception("清理内容审查状态消息失败，继续转发原消息")
-    return True
-
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.effective_user:
         return
@@ -119,18 +69,6 @@ async def _handle_new_messages(updates, context: ContextTypes.DEFAULT_TYPE):
     update = updates[0]
     message = update.effective_message
     user = update.effective_user
-
-    if len(updates) == 1:
-        from network_test.handlers import handle_message as network_handle_message
-        network_update = update
-        if getattr(update, "message", None) is None and isinstance(update, Update):
-            network_update = Update(
-                update_id=update.update_id,
-                message=update.effective_message,
-            )
-        handled = await network_handle_message(network_update, context)
-        if handled:
-            return
 
     is_over_limit, was_warned = await rate_limiter.check_user_rate_limit(user.id)
     if is_over_limit:
@@ -167,7 +105,7 @@ async def _handle_new_messages(updates, context: ContextTypes.DEFAULT_TYPE):
         from services.blacklist import start_unblock_process
         response, keyboard = await start_unblock_process(user.id)
         if response and keyboard:
-            await message.reply_text(response, reply_markup=keyboard, parse_mode="Markdown")
+            await message.reply_text(response, reply_markup=keyboard)
         elif response:
             await message.reply_text(response)
         return
@@ -297,10 +235,6 @@ async def _forward_verified_messages(
     update = updates[0]
     messages = [item.effective_message for item in updates]
 
-    for message in messages:
-        if not await _message_passes_moderation(message, context, user_id):
-            return True
-
     is_media_group = len(messages) > 1 and bool(messages[0].media_group_id)
     thread_id, _ = await get_or_create_thread(update, context)
     if not thread_id:
@@ -361,20 +295,7 @@ async def _forward_verified_messages(
             await messages[0].reply_text("发送消息时发生未知错误，请稍后再试。")
             return False
 
-    if forwarded_message_id is None:
-        return False
-
-    try:
-        await _send_autoreply_if_enabled(
-            update=update,
-            context=context,
-            user_id=user_id,
-            thread_id=thread_id,
-            forwarded_message_id=forwarded_message_id,
-        )
-    except Exception:
-        logger.exception("自动回复发送失败，原始消息已成功转发")
-    return True
+    return forwarded_message_id is not None
 
 
 async def _forward_pending_batches(
@@ -407,106 +328,6 @@ async def _forward_pending_batches(
         else:
             context.user_data.pop("pending_updates", None)
     return True
-
-
-async def _delete_message_safely(bot, chat_id: int, message_id: int):
-    try:
-        await bot.delete_message(chat_id=chat_id, message_id=message_id)
-    except Exception as error:
-        logger.warning("清理未配对消息 %s:%s 失败: %s", chat_id, message_id, error)
-
-
-async def _send_autoreply_if_enabled(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    user_id: int,
-    thread_id: int,
-    forwarded_message_id: int,
-):
-    message = update.effective_message
-    if not message.text or not await db.get_autoreply_enabled():
-        return
-
-    knowledge_base_content = await db.get_all_knowledge_content()
-    if not knowledge_base_content:
-        return
-    autoreply_text = await gemini_service.generate_autoreply(
-        message.text,
-        knowledge_base_content,
-    )
-    if not autoreply_text:
-        return
-
-    reply_parameters = ReplyParameters(
-        message_id=message.message_id,
-        allow_sending_without_reply=True,
-    )
-    try:
-        user_autoreply = await message.reply_text(
-            autoreply_text,
-            parse_mode="Markdown",
-            reply_parameters=reply_parameters,
-        )
-    except BadRequest as error:
-        error_text = error.message.lower()
-        if not any(
-            marker in error_text
-            for marker in (
-                "can't parse entities",
-                "can't find end",
-                "unsupported start tag",
-                "unsupported end tag",
-            )
-        ):
-            raise
-        logger.warning("自动回复 Markdown 解析失败，使用纯文本: %s", error)
-        user_autoreply = await message.reply_text(
-            autoreply_text,
-            reply_parameters=reply_parameters,
-        )
-
-    try:
-        admin_autoreply = await context.bot.send_message(
-            chat_id=config.FORUM_GROUP_ID,
-            text=user_autoreply.text,
-            entities=user_autoreply.entities,
-            message_thread_id=thread_id,
-            reply_parameters=ReplyParameters(
-                message_id=forwarded_message_id,
-                allow_sending_without_reply=True,
-            ),
-        )
-    except Exception as error:
-        logger.warning("管理员侧自动回复发送失败，撤销用户侧消息: %s", error)
-        await _delete_message_safely(
-            context.bot,
-            message.chat_id,
-            user_autoreply.message_id,
-        )
-        return
-
-    try:
-        await db.save_message_mapping(
-            user_id=user_id,
-            user_chat_id=message.chat_id,
-            user_message_id=user_autoreply.message_id,
-            admin_chat_id=config.FORUM_GROUP_ID,
-            admin_message_id=admin_autoreply.message_id,
-            thread_id=thread_id,
-            origin_side="admin",
-        )
-    except Exception:
-        logger.exception("自动回复映射保存失败，撤销两侧消息")
-        await _delete_message_safely(
-            context.bot,
-            message.chat_id,
-            user_autoreply.message_id,
-        )
-        await _delete_message_safely(
-            context.bot,
-            config.FORUM_GROUP_ID,
-            admin_autoreply.message_id,
-        )
 
 
 def _replace_pending_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -603,26 +424,6 @@ async def _handle_edited_message_now(
 
     is_blocked, _ = await db.is_blacklisted(user.id)
     if is_blocked:
-        return
-
-    if not await _message_passes_moderation(
-        message,
-        context,
-        user.id,
-        rejection_action="同步编辑",
-    ):
-        try:
-            await context.bot.send_message(
-                chat_id=mapping["admin_chat_id"],
-                message_thread_id=mapping["thread_id"],
-                text="用户对这条消息的编辑未通过内容审查，当前仍保留上一版本。",
-                reply_parameters=ReplyParameters(
-                    message_id=mapping["admin_message_id"],
-                    allow_sending_without_reply=True,
-                ),
-            )
-        except Exception:
-            logger.exception("发送用户编辑拦截通知失败")
         return
 
     synced = await sync_edited_message(

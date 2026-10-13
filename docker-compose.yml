@@ -1,9 +1,14 @@
 services:
   TG-Antiharassment-Bot:
-    container_name: TG-Antiharassment-Bot  # 容器名，可定义
-    image: weijiaqaq/tg-antiharassment-bot:latest
+    container_name: TG-Antiharassment-Bot
+    image: ghcr.io/k23flux/tg-antiharassment-bot:latest
     restart: unless-stopped
     env_file:
-     - .env
+      - .env
     volumes:
-     - ./data:/app/data
+      - ./data:/app/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"

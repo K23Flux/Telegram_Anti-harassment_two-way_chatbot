@@ -1,8 +1,7 @@
 import time
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.helpers import escape_markdown
 from database import models as db
-from services.gemini_service import gemini_service
+from services.challenges import random_challenge
 from config import config
 
 pending_unblocks = {}
@@ -29,6 +28,12 @@ def is_unblock_pending(user_id: int) -> tuple[bool, bool]:
     
     return True, False
 
+def _unblock_keyboard(options):
+    # 回调里只传选项序号，避免中文选项超出 64 字节的 callback_data 上限
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(option, callback_data=f"unblock_{index}") for index, option in enumerate(options)]
+    ])
+
 def get_pending_unblock_message(user_id: int):
     if user_id not in pending_unblocks:
         return None
@@ -42,11 +47,7 @@ def get_pending_unblock_message(user_id: int):
     question = session['question']
     options = session['options']
     
-    keyboard = [
-        [InlineKeyboardButton(option, callback_data=f"unblock_{option}") for option in options]
-    ]
-    
-    return question, InlineKeyboardMarkup(keyboard)
+    return question, _unblock_keyboard(options)
 
 async def start_unblock_process(user_id: int):
     is_blocked, is_permanent = await db.is_blacklisted(user_id)
@@ -66,7 +67,7 @@ async def start_unblock_process(user_id: int):
                 f"如果您认为这是误操作，请回答以下问题以自动解封：\n\n{question}"
             ), keyboard
     
-    challenge = await gemini_service.generate_unblock_question()
+    challenge = random_challenge()
     question = challenge['question']
     correct_answer = challenge['correct_answer']
     options = challenge['options']
@@ -78,16 +79,12 @@ async def start_unblock_process(user_id: int):
         'created_at': time.time()
     }
     
-    keyboard = [
-        [InlineKeyboardButton(option, callback_data=f"unblock_{option}") for option in options]
-    ]
-    
     return (
         "您已被暂时封禁。\n\n"
         f"如果您认为这是误操作，请回答以下问题以自动解封：\n\n{question}"
-    ), InlineKeyboardMarkup(keyboard)
+    ), _unblock_keyboard(options)
 
-async def verify_unblock_answer(user_id: int, user_answer: str):
+async def verify_unblock_answer(user_id: int, option_index: int):
     if user_id not in pending_unblocks:
         return "解封会话已过期或不存在。", False
 
@@ -97,6 +94,8 @@ async def verify_unblock_answer(user_id: int, user_answer: str):
         del pending_unblocks[user_id]
         return "解封超时，请重新发送消息以获取新问题。", False
 
+    options = session['options']
+    user_answer = options[option_index] if 0 <= option_index < len(options) else None
     if user_answer == session['answer']:
         del pending_unblocks[user_id]
         await db.remove_from_blacklist(user_id)
@@ -198,7 +197,6 @@ async def get_all_users_keyboard(page: int = 1, per_page: int = 5, callback_pref
         first_name = user.get('first_name') or 'N/A'
         username = user.get('username')
         is_blacklisted = user.get('is_blacklisted', 0)
-        spam_count = user.get('spam_count', 0)
         
         safe_first_name = _safe_text_for_markdown(first_name)
         safe_username = _safe_text_for_markdown(username) if username else None
@@ -208,13 +206,10 @@ async def get_all_users_keyboard(page: int = 1, per_page: int = 5, callback_pref
             user_info += f" (@{safe_username})"
         
         blacklist_status = "是" if is_blacklisted else "否"
-        has_spam = "是" if spam_count > 0 else "否"
         
         message += (
             f"{idx}. {user_info} (`{user_id}`)\n"
-            f"   是否被拉黑: {blacklist_status}\n"
-            f"   是否发送过垃圾信息: {has_spam}\n"
-            f"   发送垃圾信息条数: {spam_count}\n\n"
+            f"   是否被拉黑: {blacklist_status}\n\n"
         )
     
     navigation_buttons = []
@@ -271,7 +266,6 @@ async def get_blacklist_keyboard_detailed(page: int = 1, per_page: int = 5):
             blocked_at = user_details.get('blocked_at')
             permanent = user_details.get('permanent', 0)
             blacklist_strikes = user_details.get('blacklist_strikes', 0)
-            spam_count = user_details.get('spam_count', 0)
             
             safe_first_name = _safe_text_for_markdown(first_name)
             safe_username = _safe_text_for_markdown(username) if username else None
@@ -292,7 +286,6 @@ async def get_blacklist_keyboard_detailed(page: int = 1, per_page: int = 5):
                 f"   封禁类型: {permanent_text}\n"
                 f"   封禁原因: {safe_reason}\n"
                 f"   封禁次数: {display_strikes}\n"
-                f"   垃圾信息条数: {spam_count}\n"
             )
             if blocked_at:
                 message += f"   封禁时间: {blocked_at}\n"
@@ -331,82 +324,4 @@ async def get_blacklist_keyboard_detailed(page: int = 1, per_page: int = 5):
     if not keyboard:
         keyboard = [[InlineKeyboardButton("返回统计菜单", callback_data="stats_back_to_menu")]]
     
-    return message, InlineKeyboardMarkup(keyboard)
-
-async def get_exemptions_keyboard(page: int = 1, per_page: int = 5):
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-    from datetime import datetime, timezone
-    
-    total_count = await db.get_exemptions_count()
-    
-    if total_count == 0:
-        return "豁免名单中没有用户。", None
-
-    total_pages = (total_count + per_page - 1) // per_page
-
-    if page < 1:
-        page = 1
-    elif page > total_pages:
-        page = total_pages
-
-    offset = (page - 1) * per_page
-
-    exemptions = await db.get_exemptions_paginated(limit=per_page, offset=offset)
-    
-    if not exemptions:
-        return "豁免名单中没有用户。", None
-
-    keyboard = []
-    message = f"豁免名单 (第 {page}/{total_pages} 页)\n\n"
-    
-    for idx, exemption in enumerate(exemptions, 1):
-        user_id = exemption.get('user_id')
-        first_name = exemption.get('first_name') or 'N/A'
-        username = exemption.get('username')
-        is_permanent = bool(exemption.get('is_permanent', 0))
-        expires_at = exemption.get('expires_at')
-        reason = exemption.get('reason') or '无'
-        
-        safe_first_name = _safe_text_for_markdown(first_name)
-        safe_username = _safe_text_for_markdown(username) if username else None
-        safe_reason = _safe_text_for_markdown(reason)
-        
-        user_info = f"{safe_first_name}"
-        if safe_username:
-            user_info += f" (@{safe_username})"
-        
-        exemption_type = "永久豁免" if is_permanent else "临时豁免"
-        expires_info = ""
-        if not is_permanent and expires_at:
-            try:
-                expires_datetime = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
-                if expires_datetime.tzinfo is None:
-                    expires_datetime = expires_datetime.replace(tzinfo=timezone.utc)
-                now = datetime.now(timezone.utc)
-                if expires_datetime > now:
-                    expires_info = f"\n到期时间: {expires_at}"
-                else:
-                    expires_info = "\n已过期"
-            except Exception:
-                expires_info = f"\n到期时间: {expires_at}"
-        
-        message += (
-            f"{idx}. {user_info} (`{user_id}`)\n"
-            f"   类型: {exemption_type}\n"
-            f"   原因: {safe_reason}{expires_info}\n\n"
-        )
-        
-        keyboard.append([
-            InlineKeyboardButton(f"移除豁免 {first_name}", callback_data=f"admin_remove_exemption_{user_id}")
-        ])
-    
-    navigation_buttons = []
-    if page > 1:
-        navigation_buttons.append(InlineKeyboardButton("上一页", callback_data=f"panel_exemptions_page_{page - 1}"))
-    if page < total_pages:
-        navigation_buttons.append(InlineKeyboardButton("下一页", callback_data=f"panel_exemptions_page_{page + 1}"))
-    
-    if navigation_buttons:
-        keyboard.append(navigation_buttons)
-
     return message, InlineKeyboardMarkup(keyboard)

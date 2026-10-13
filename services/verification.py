@@ -5,7 +5,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from database import models as db
 from config import config
-from services.gemini_service import gemini_service
+from services.challenges import random_challenge
 
 pending_verifications = {}
 
@@ -39,7 +39,7 @@ def _build_keyboard(verification):
     ])
 
 async def create_verification(user_id: int):
-    challenge = await gemini_service.generate_verification_challenge()
+    challenge = random_challenge()
     existing_attempts = pending_verifications.get(user_id, {}).get('attempts', 0)
     verification = _build_verification(challenge, existing_attempts)
     pending_verifications[user_id] = verification
@@ -84,7 +84,7 @@ async def verify_answer(user_id: int, challenge_id: str, option_index: int):
         )
         return False, message, True, None, False
     
-    challenge = await gemini_service.generate_verification_challenge()
+    challenge = random_challenge()
     next_verification = _build_verification(challenge, verification['attempts'])
     pending_verifications[user_id] = next_verification
 

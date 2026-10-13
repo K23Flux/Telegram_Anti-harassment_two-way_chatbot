@@ -108,9 +108,7 @@ def _load_handler_registration(monkeypatch):
             "blacklist",
             "stats",
             "getid",
-            "autoreply",
             "panel",
-            "exempt",
         ],
     )
     user_module = _stub_module(
@@ -122,20 +120,7 @@ def _load_handler_registration(monkeypatch):
     admin_module = _stub_module(
         monkeypatch,
         "handlers.admin_handler",
-        ["handle_admin_edit", "handle_admin_reply", "view_filtered"],
-    )
-    _stub_module(
-        monkeypatch,
-        "network_test.commands",
-        [
-            "ping_command",
-            "nexttrace_command",
-            "add_user_command",
-            "rm_user_command",
-            "add_server_command",
-            "rm_server_command",
-            "install_nexttrace_command",
-        ],
+        ["handle_admin_edit", "handle_admin_reply"],
     )
     handlers_module = importlib.import_module("handlers")
     return handlers_module, user_module, admin_module, command_module
@@ -388,43 +373,3 @@ def test_unknown_commands_fall_through_to_relay_handlers(monkeypatch):
         assert all(not handler.check_update(update) for handler in command_handlers)
     assert bool(user_relay.check_update(user_update)) is True
     assert bool(admin_relay.check_update(admin_update)) is True
-
-
-def test_rss_commands_only_intercept_new_private_messages(monkeypatch, tmp_path):
-    monkeypatch.setitem(sys.modules, "feedparser", ModuleType("feedparser"))
-    import rss
-
-    callback = _callback("rss_list")
-    application = RecordingApplication()
-    application.bot_data = {}
-    monkeypatch.setattr(rss.rss_handlers, "COMMAND_MAP", {"rss_list": callback})
-    monkeypatch.setattr(
-        rss.data_manager,
-        "load_subscriptions",
-        lambda data_file: None,
-    )
-    monkeypatch.setattr(
-        rss.settings,
-        "get_data_file",
-        lambda: str(tmp_path / "rss.json"),
-    )
-    monkeypatch.setattr(rss.settings, "is_enabled", lambda: False)
-
-    rss.setup(application)
-
-    handler = next(
-        item
-        for item in application.handlers
-        if isinstance(item, CommandHandler) and item.callback is callback
-    )
-    message = _command_message(
-        chat_id=42,
-        chat_type=Chat.PRIVATE,
-        user_id=42,
-        command="rss_list",
-    )
-
-    assert bool(handler.check_update(Update(update_id=16, message=message))) is True
-    assert bool(
-        handler.check_update(Update(update_id=17, edited_message=message))
-    ) is False

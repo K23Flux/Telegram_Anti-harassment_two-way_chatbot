@@ -103,7 +103,6 @@ async def build_user_info_card_keyboard(
     username: str | None = None
 ) -> InlineKeyboardMarkup:
     is_blocked, _ = await db.is_blacklisted(user_id)
-    is_exempted = await db.is_exempted(user_id)
 
     if username is None:
         user_data = await db.get_user(user_id)
@@ -113,10 +112,6 @@ async def build_user_info_card_keyboard(
         InlineKeyboardButton(
             "解除封禁" if is_blocked else "封禁",
             callback_data=f"usercard_block_{user_id}"
-        ),
-        InlineKeyboardButton(
-            "取消豁免" if is_exempted else "豁免",
-            callback_data=f"usercard_exempt_{user_id}"
         ),
     ]
 

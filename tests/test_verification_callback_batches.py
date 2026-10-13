@@ -45,16 +45,6 @@ def _load_callback_handler(monkeypatch):
     database_models = _stub_module(monkeypatch, "database.models")
     database_package.models = database_models
 
-    rss_package = _stub_module(
-        monkeypatch,
-        "rss",
-        data_manager=SimpleNamespace(),
-        settings=SimpleNamespace(),
-        enable_feature=lambda: None,
-        disable_feature=lambda: None,
-    )
-    rss_package.__path__ = []
-
     module_path = Path(__file__).resolve().parents[1] / "handlers" / "callback_handler.py"
     spec = importlib.util.spec_from_file_location(
         "handlers.callback_handler_under_test",

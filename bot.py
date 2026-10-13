@@ -4,7 +4,6 @@ from telegram import Update
 from telegram.ext import Application
 from config import config
 from handlers import register_handlers
-from rss import setup as setup_rss
 from database.db_manager import DatabaseManager
 from services.telegram_commands import register_bot_commands
 
@@ -30,7 +29,6 @@ def main():
 
     app = Application.builder().token(config.BOT_TOKEN).post_init(post_init).build()
 
-    setup_rss(app)
     register_handlers(app)
 
     config.validate()

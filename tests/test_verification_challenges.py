@@ -1,19 +1,17 @@
 import importlib.util
 from pathlib import Path
 import sys
-from types import ModuleType, SimpleNamespace
-from unittest.mock import AsyncMock
+from types import ModuleType
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 
 @pytest.fixture
 def verification(monkeypatch):
-    gemini_module = ModuleType("services.gemini_service")
-    gemini_module.gemini_service = SimpleNamespace(
-        generate_verification_challenge=AsyncMock()
-    )
-    monkeypatch.setitem(sys.modules, "services.gemini_service", gemini_module)
+    challenges_module = ModuleType("services.challenges")
+    challenges_module.random_challenge = Mock()
+    monkeypatch.setitem(sys.modules, "services.challenges", challenges_module)
 
     module_path = Path(__file__).resolve().parents[1] / "services" / "verification.py"
     spec = importlib.util.spec_from_file_location(
@@ -46,9 +44,9 @@ async def test_stale_challenge_does_not_consume_attempt(
         },
     ]
     monkeypatch.setattr(
-        verification.gemini_service,
-        "generate_verification_challenge",
-        AsyncMock(side_effect=challenges),
+        verification,
+        "random_challenge",
+        Mock(side_effect=challenges),
     )
     blacklist = AsyncMock()
     monkeypatch.setattr(verification.db, "add_to_blacklist", blacklist)
@@ -91,9 +89,9 @@ async def test_keyboard_uses_option_index_and_current_challenge_id(
         "options": ["a very long answer with : and _", "other"],
     }
     monkeypatch.setattr(
-        verification.gemini_service,
-        "generate_verification_challenge",
-        AsyncMock(return_value=challenge),
+        verification,
+        "random_challenge",
+        Mock(return_value=challenge),
     )
     update_verification = AsyncMock()
     monkeypatch.setattr(

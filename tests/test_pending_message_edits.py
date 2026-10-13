@@ -9,13 +9,11 @@ import pytest
 from telegram import (
     Chat,
     Message,
-    MessageEntity,
     PhotoSize,
-    ReplyParameters,
     Update,
     User,
 )
-from telegram.error import BadRequest, NetworkError
+from telegram.error import BadRequest
 
 
 def _stub_module(monkeypatch, name, **attributes):
@@ -37,16 +35,6 @@ def _load_user_handler(monkeypatch):
         monkeypatch,
         "services.thread_manager",
         get_or_create_thread=AsyncMock(),
-    )
-    _stub_module(
-        monkeypatch,
-        "services.gemini_service",
-        gemini_service=SimpleNamespace(),
-    )
-    _stub_module(
-        monkeypatch,
-        "utils.media_converter",
-        sticker_to_image=AsyncMock(),
     )
     _stub_module(
         monkeypatch,
@@ -126,47 +114,6 @@ def _configure_unverified_user(monkeypatch, user_handler):
     )
 
 
-def _configure_autoreply(monkeypatch, user_handler, text="automatic answer"):
-    monkeypatch.setattr(
-        user_handler.db,
-        "get_autoreply_enabled",
-        AsyncMock(return_value=True),
-    )
-    monkeypatch.setattr(
-        user_handler.db,
-        "get_all_knowledge_content",
-        AsyncMock(return_value="knowledge base"),
-    )
-    monkeypatch.setattr(
-        user_handler.db,
-        "save_message_mapping",
-        AsyncMock(),
-    )
-    monkeypatch.setattr(
-        user_handler.gemini_service,
-        "generate_autoreply",
-        AsyncMock(return_value=text),
-        raising=False,
-    )
-
-
-def _autoreply_subject(reply_text):
-    message = SimpleNamespace(
-        message_id=101,
-        chat_id=42,
-        text="user question",
-        reply_text=reply_text,
-    )
-    update = SimpleNamespace(effective_message=message)
-    bot = SimpleNamespace(
-        send_message=AsyncMock(
-            return_value=SimpleNamespace(message_id=301),
-        ),
-        delete_message=AsyncMock(),
-    )
-    return message, update, SimpleNamespace(bot=bot)
-
-
 def test_missing_thread_error_does_not_match_missing_source_message(monkeypatch):
     user_handler = _load_user_handler(monkeypatch)
 
@@ -182,91 +129,6 @@ def test_missing_thread_error_does_not_match_missing_source_message(monkeypatch)
     assert user_handler._is_missing_thread_error(
         BadRequest("Message not found")
     ) is False
-
-
-@pytest.mark.asyncio
-async def test_autoreply_explicitly_replies_to_original_user_message(monkeypatch):
-    user_handler = _load_user_handler(monkeypatch)
-    _configure_autoreply(monkeypatch, user_handler, text="*automatic* answer")
-    user_autoreply = SimpleNamespace(
-        message_id=201,
-        text="automatic answer",
-        entities=(MessageEntity(MessageEntity.BOLD, 0, 9),),
-    )
-    reply_text = AsyncMock(return_value=user_autoreply)
-    message, update, context = _autoreply_subject(reply_text)
-
-    await user_handler._send_autoreply_if_enabled(
-        update=update,
-        context=context,
-        user_id=42,
-        thread_id=77,
-        forwarded_message_id=501,
-    )
-
-    reply_text.assert_awaited_once()
-    kwargs = reply_text.await_args.kwargs
-    assert kwargs["parse_mode"] == "Markdown"
-    assert isinstance(kwargs["reply_parameters"], ReplyParameters)
-    assert kwargs["reply_parameters"].message_id == message.message_id
-    assert kwargs["reply_parameters"].allow_sending_without_reply is True
-    assert context.bot.send_message.await_args.kwargs["text"] == user_autoreply.text
-    assert (
-        context.bot.send_message.await_args.kwargs["entities"]
-        == user_autoreply.entities
-    )
-
-
-@pytest.mark.asyncio
-async def test_autoreply_bad_markdown_retries_once_as_plain_text(monkeypatch):
-    user_handler = _load_user_handler(monkeypatch)
-    _configure_autoreply(monkeypatch, user_handler)
-    user_autoreply = SimpleNamespace(
-        message_id=201,
-        text="automatic answer",
-        entities=(),
-    )
-    reply_text = AsyncMock(
-        side_effect=[BadRequest("can't parse entities"), user_autoreply],
-    )
-    message, update, context = _autoreply_subject(reply_text)
-
-    await user_handler._send_autoreply_if_enabled(
-        update=update,
-        context=context,
-        user_id=42,
-        thread_id=77,
-        forwarded_message_id=501,
-    )
-
-    assert reply_text.await_count == 2
-    markdown_call, plain_text_call = reply_text.await_args_list
-    assert markdown_call.kwargs["parse_mode"] == "Markdown"
-    assert "parse_mode" not in plain_text_call.kwargs
-    for reply_call in (markdown_call, plain_text_call):
-        parameters = reply_call.kwargs["reply_parameters"]
-        assert parameters.message_id == message.message_id
-        assert parameters.allow_sending_without_reply is True
-
-
-@pytest.mark.asyncio
-async def test_autoreply_network_error_is_not_retried_as_plain_text(monkeypatch):
-    user_handler = _load_user_handler(monkeypatch)
-    _configure_autoreply(monkeypatch, user_handler)
-    reply_text = AsyncMock(side_effect=NetworkError("network unavailable"))
-    _, update, context = _autoreply_subject(reply_text)
-
-    with pytest.raises(NetworkError):
-        await user_handler._send_autoreply_if_enabled(
-            update=update,
-            context=context,
-            user_id=42,
-            thread_id=77,
-            forwarded_message_id=501,
-        )
-
-    assert reply_text.await_count == 1
-    context.bot.send_message.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -374,11 +236,6 @@ async def test_closed_topic_is_reopened_and_relay_retried(monkeypatch):
     )
     monkeypatch.setattr(
         user_handler,
-        "_message_passes_moderation",
-        AsyncMock(return_value=True),
-    )
-    monkeypatch.setattr(
-        user_handler,
         "get_or_create_thread",
         AsyncMock(return_value=(77, False)),
     )
@@ -389,11 +246,6 @@ async def test_closed_topic_is_reopened_and_relay_retried(monkeypatch):
         ]
     )
     monkeypatch.setattr(user_handler, "_resend_message", resend)
-    monkeypatch.setattr(
-        user_handler,
-        "_send_autoreply_if_enabled",
-        AsyncMock(),
-    )
     invalid_thread = AsyncMock()
     monkeypatch.setattr(user_handler, "handle_invalid_thread", invalid_thread)
 
@@ -413,53 +265,8 @@ async def test_closed_topic_is_reopened_and_relay_retried(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_moderation_status_cleanup_failure_does_not_block_relay(monkeypatch):
-    user_handler = _load_user_handler(monkeypatch)
-    analyzing_message = SimpleNamespace(
-        delete=AsyncMock(side_effect=NetworkError("delete failed")),
-        edit_text=AsyncMock(),
-    )
-    context = SimpleNamespace(
-        bot=SimpleNamespace(send_message=AsyncMock(return_value=analyzing_message)),
-    )
-    message = SimpleNamespace(
-        message_id=101,
-        chat_id=42,
-        text="safe message",
-        caption=None,
-        photo=None,
-        sticker=None,
-    )
-    monkeypatch.setattr(
-        user_handler.db,
-        "is_exempted",
-        AsyncMock(return_value=False),
-    )
-    monkeypatch.setattr(
-        user_handler.gemini_service,
-        "analyze_message",
-        AsyncMock(return_value={"is_spam": False}),
-        raising=False,
-    )
-
-    passed = await user_handler._message_passes_moderation(
-        message,
-        context,
-        42,
-    )
-
-    assert passed is True
-    analyzing_message.delete.assert_awaited_once()
-
-
-@pytest.mark.asyncio
 async def test_verified_failed_batch_is_retained_for_next_attempt(monkeypatch):
     user_handler = _load_user_handler(monkeypatch)
-    _stub_module(
-        monkeypatch,
-        "network_test.handlers",
-        handle_message=AsyncMock(return_value=False),
-    )
     user = SimpleNamespace(
         id=42,
         username="sender",

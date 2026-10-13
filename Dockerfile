@@ -1,17 +1,17 @@
-# 使用官方 Python 镜像作为基础镜像
-FROM python:3.11-slim
+FROM python:3.13-slim
 
-# 设置工作目录
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
-# 复制依赖文件到工作目录
 COPY requirements.txt .
-
-# 安装依赖
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 复制所有项目文件到工作目录
-COPY . .
+COPY bot.py config.py ./
+COPY database ./database
+COPY handlers ./handlers
+COPY services ./services
+COPY utils ./utils
 
-# 运行 bot
 CMD ["python", "bot.py"]

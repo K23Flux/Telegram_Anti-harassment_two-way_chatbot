@@ -2,7 +2,6 @@ import aiosqlite
 import os
 import logging
 from contextlib import asynccontextmanager
-from datetime import datetime
 
 class DatabaseManager:
     _instance = None
@@ -45,9 +44,6 @@ class DatabaseManager:
             await self.create_verification_sessions_table(db)
             await self.create_settings_table(db)
             await self.create_statistics_table(db)
-            await self.create_filtered_messages_table(db)
-            await self.create_knowledge_base_table(db)
-            await self.create_exemptions_table(db)
             await self.migrate_database(db)
             await db.commit()
         logging.info("数据库初始化完成。")
@@ -180,18 +176,8 @@ class DatabaseManager:
             ('bot_version', '1.0.0', '机器人当前版本'),
             ('welcome_message', '欢迎使用本机器人！', '新用户收到的欢迎消息'),
             ('verification_enabled', '1', '是否启用新用户验证 (1=是, 0=否)'),
-            ('ai_filter_enabled', '1', '是否启用AI垃圾消息过滤 (1=是, 0=否)'),
             ('max_message_length', '4096', '允许接收的最大消息长度'),
             ('queue_max_size', '1000', '内部消息处理队列的最大容量'),
-            ('ai_provider', 'gemini', '当前使用的AI提供商 (gemini, openai)'),
-            
-            ('gemini_model_filter', 'gemini-2.5-flash', 'Gemini 内容审查模型'),
-            ('gemini_model_verification', 'gemini-2.5-flash-lite', 'Gemini 验证码生成模型'),
-            ('gemini_model_autoreply', 'gemini-2.5-flash', 'Gemini 自动回复模型'),
-
-            ('openai_model_filter', 'gpt-4.1', 'OpenAI 内容审查模型'),
-            ('openai_model_verification', 'gpt-4.1-mini', 'OpenAI 验证码生成模型'),
-            ('openai_model_autoreply', 'gpt-4.1', 'OpenAI 自动回复模型')
         ]
         for key, value, description in default_settings:
             await db.execute(
@@ -218,58 +204,6 @@ class DatabaseManager:
         ''')
         await db.execute('CREATE INDEX IF NOT EXISTS idx_statistics_date ON statistics(stat_date)')
 
-    async def create_filtered_messages_table(self, db):
-        await db.execute('''
-            CREATE TABLE IF NOT EXISTS filtered_messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                message_id INTEGER NOT NULL,
-                content TEXT,
-                reason TEXT,
-                media_type TEXT,
-                media_file_id TEXT,
-                filtered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
-            )
-        ''')
-        await db.execute('CREATE INDEX IF NOT EXISTS idx_filtered_messages_user_id ON filtered_messages(user_id)')
-
-    async def create_knowledge_base_table(self, db):
-        await db.execute('''
-            CREATE TABLE IF NOT EXISTS knowledge_base (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                content TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        await db.execute('CREATE INDEX IF NOT EXISTS idx_knowledge_base_title ON knowledge_base(title)')
-
-    async def create_exemptions_table(self, db):
-        await db.execute('''
-            CREATE TABLE IF NOT EXISTS exemptions (
-                user_id INTEGER PRIMARY KEY,
-                is_permanent INTEGER DEFAULT 0,
-                expires_at TIMESTAMP,
-                exempted_by INTEGER NOT NULL,
-                reason TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
-            )
-        ''')
-        await db.execute('CREATE INDEX IF NOT EXISTS idx_exemptions_expires ON exemptions(expires_at)')
-        await db.execute('CREATE INDEX IF NOT EXISTS idx_exemptions_permanent ON exemptions(is_permanent)')
-
-    async def get_filtered_messages_by_user(self, user_id, limit=5):
-        async with self.get_connection() as db:
-            cursor = await db.execute(
-                'SELECT content, reason FROM filtered_messages WHERE user_id = ? ORDER BY filtered_at DESC LIMIT ?',
-                (user_id, limit)
-            )
-            rows = await cursor.fetchall()
-            return [{"content": row[0], "reason": row[1]} for row in rows]
-
     async def migrate_database(self, db):
         try:
             await db.execute('ALTER TABLE users ADD COLUMN blacklist_strikes INTEGER DEFAULT 0 NOT NULL')
@@ -285,30 +219,13 @@ class DatabaseManager:
             if "duplicate column name" not in str(e):
                 raise e
 
-        try:
-            await db.execute(
-                'INSERT OR IGNORE INTO settings (key, value, description) VALUES (?, ?, ?)',
-                ('autoreply_enabled', '0', '是否启用自动回复功能 (1=是, 0=否)')
-            )
-            logging.info("数据库迁移：成功添加自动回复开关设置。")
-        except Exception as e:
-            logging.warning(f"添加自动回复设置时出错: {e}")
-
-        try:
-            await db.execute('INSERT OR IGNORE INTO settings (key, value, description) VALUES (?, ?, ?)', ('ai_provider', 'gemini', '当前使用的AI提供商 (gemini, openai)'))
-            
-            await db.execute('INSERT OR IGNORE INTO settings (key, value, description) VALUES (?, ?, ?)', ('gemini_model_filter', 'gemini-2.5-flash', 'Gemini 内容审查模型'))
-            await db.execute('INSERT OR IGNORE INTO settings (key, value, description) VALUES (?, ?, ?)', ('gemini_model_verification', 'gemini-2.5-flash-lite', 'Gemini 验证码生成模型'))
-            await db.execute('INSERT OR IGNORE INTO settings (key, value, description) VALUES (?, ?, ?)', ('gemini_model_autoreply', 'gemini-2.5-flash', 'Gemini 自动回复模型'))
-
-            await db.execute('INSERT OR IGNORE INTO settings (key, value, description) VALUES (?, ?, ?)', ('openai_model_filter', 'gpt-4.1', 'OpenAI 内容审查模型'))
-            await db.execute('INSERT OR IGNORE INTO settings (key, value, description) VALUES (?, ?, ?)', ('openai_model_verification', 'gpt-4.1-mini', 'OpenAI 验证码生成模型'))
-            await db.execute('INSERT OR IGNORE INTO settings (key, value, description) VALUES (?, ?, ?)', ('openai_model_autoreply', 'gpt-4.1', 'OpenAI 自动回复模型'))
-
-            await db.execute("DELETE FROM settings WHERE key IN ('openai_model', 'gemini_model')")
-
-            logging.info("数据库迁移：成功添加细分AI设置。")
-        except Exception as e:
-            logging.warning(f"添加AI设置时出错: {e}")
+        # AI 功能已移除：清掉旧版本写入的 AI 相关设置项。
+        # filtered_messages / knowledge_base / exemptions 三张旧表不再使用，保留不删，避免丢数据。
+        await db.execute(
+            "DELETE FROM settings WHERE key IN ("
+            "'ai_filter_enabled', 'ai_provider', 'autoreply_enabled', "
+            "'gemini_model', 'gemini_model_filter', 'gemini_model_verification', 'gemini_model_autoreply', "
+            "'openai_model', 'openai_model_filter', 'openai_model_verification', 'openai_model_autoreply')"
+        )
 
 db_manager = DatabaseManager()
