@@ -2,7 +2,7 @@
 
 让陌生人通过机器人私聊你，而不用暴露你的 Telegram 账号。每个来聊天的人在你的管理群里对应一个话题，你在话题里直接回复就行。
 
-Fork 自 [Hamster-Prime/Telegram_Anti-harassment_two-way_chatbot](https://github.com/Hamster-Prime/Telegram_Anti-harassment_two-way_chatbot)。这个版本只为「聊天」服务：删掉了 AI 审核、AI 自动回复、网络测试（Ping / NextTrace）和 RSS 订阅，补上了送达标记、发送失败提示、消息撤回和出错提醒。
+Fork 自 [Hamster-Prime/Telegram_Anti-harassment_two-way_chatbot](https://github.com/Hamster-Prime/Telegram_Anti-harassment_two-way_chatbot)。这个版本只为「聊天」服务：删掉了 AI 审核、AI 自动回复、网络测试（Ping / NextTrace）和 RSS 订阅，补上了发送失败提示、消息撤回和出错提醒。
 
 ## 功能
 
@@ -18,7 +18,6 @@ Fork 自 [Hamster-Prime/Telegram_Anti-harassment_two-way_chatbot](https://github
 
 - 每个人对应一个话题，话题开头有一张信息卡片，包括头像、名字、ID、用户名，以及「封禁 / 解除封禁」和「直接联系」按钮。
 - 在话题里直接发消息就是回复对方，各种类型都支持。编辑自己的消息会同步给对方。
-- **送达标记**：消息送到对方后，机器人会在你的那条消息上点一个 👍。
 - **发送失败提示**：对方停用或拉黑了机器人、触发频率限制等情况下，话题里会出现一条说明。
 - **撤回**：回复自己发错的那条消息并发送 `/del`，对方那边的这条也会被删掉。
 - **出错提醒**：机器人运行中出错时，在管理群的 General 里提醒你。同类错误 10 分钟内只提醒一次。
@@ -108,9 +107,6 @@ docker compose pull && docker compose up -d
 | `DATABASE_PATH` | 数据库路径（容器内） | `./data/bot.db` |
 
 ## 常见问题
-
-**你发的消息没有出现 👍**
-先看话题里有没有「发送失败」的提示。如果消息确实送到了却没有 👍，多半是群设置里限制了可用的表情回应，把 👍 加进允许列表就行。这不影响消息送达。
 
 **`/del` 提示撤回失败**
 Telegram 只允许机器人删除 48 小时内的消息；对方已经自己删掉的消息也无法再删。相册要一张一张撤回。

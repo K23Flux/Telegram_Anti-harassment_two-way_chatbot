@@ -1,4 +1,4 @@
-"""精简版新增 / 调整行为的测试：送达标记与失败提示、/del 撤回、速率限制不封禁、
+"""精简版新增 / 调整行为的测试：发送失败提示、/del 撤回、速率限制不封禁、
 出错提醒节流、管理员按钮只 answer 一次、旧表清理、列表 HTML 转义。"""
 
 from types import SimpleNamespace
@@ -48,25 +48,22 @@ def _topic_message(message_id=500, reply_to=None):
 def _bot():
     return SimpleNamespace(
         send_message=AsyncMock(),
-        set_message_reaction=AsyncMock(),
         delete_message=AsyncMock(),
     )
 
 
 # ---------------------------------------------------------------------------
-# 管理员回复：送达标记 / 失败提示
+# 管理员回复：成功不打标记 / 失败提示
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_successful_reply_gets_delivered_reaction(monkeypatch, database):
+async def test_successful_reply_is_silent(monkeypatch, database):
     message = _topic_message()
     context = SimpleNamespace(bot=_bot())
     monkeypatch.setattr(admin_handler, "relay_message", AsyncMock())
 
     await admin_handler._handle_admin_messages([SimpleNamespace(effective_message=message)], context)
 
-    context.bot.set_message_reaction.assert_awaited_once()
-    assert context.bot.set_message_reaction.await_args.kwargs["message_id"] == 500
     context.bot.send_message.assert_not_awaited()
 
 
@@ -80,24 +77,9 @@ async def test_blocked_bot_reply_reports_failure_in_topic(monkeypatch, database)
 
     await admin_handler._handle_admin_messages([SimpleNamespace(effective_message=message)], context)
 
-    context.bot.set_message_reaction.assert_not_awaited()
     sent = context.bot.send_message.await_args.kwargs
     assert sent["message_thread_id"] == 77
     assert "停用或拉黑" in sent["text"]
-
-
-@pytest.mark.asyncio
-async def test_reaction_failure_is_ignored(monkeypatch, database):
-    message = _topic_message()
-    bot = _bot()
-    bot.set_message_reaction.side_effect = BadRequest("REACTION_INVALID")
-    monkeypatch.setattr(admin_handler, "relay_message", AsyncMock())
-
-    await admin_handler._handle_admin_messages(
-        [SimpleNamespace(effective_message=message)], SimpleNamespace(bot=bot)
-    )
-
-    bot.send_message.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

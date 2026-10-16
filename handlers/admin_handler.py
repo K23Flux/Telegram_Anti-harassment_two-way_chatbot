@@ -2,7 +2,7 @@
 
 import logging
 
-from telegram import ReactionTypeEmoji, ReplyParameters, Update
+from telegram import ReplyParameters, Update
 from telegram.error import Forbidden, RetryAfter, TelegramError
 from telegram.ext import ContextTypes
 from database import models as db
@@ -10,8 +10,6 @@ from services.media_group_buffer import enqueue_message, replace_buffered_update
 from services.message_relay import relay_media_group, relay_message, sync_edited_message
 
 logger = logging.getLogger(__name__)
-
-DELIVERED_REACTION = "👍"
 
 async def _send_reply_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
     return await relay_message(
@@ -48,7 +46,7 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def _handle_admin_messages(updates, context: ContextTypes.DEFAULT_TYPE):
-    """把管理员在话题里发的消息（或一组相册）转给用户；成功点 👍，失败在话题里说明原因。"""
+    """把管理员在话题里发的消息（或一组相册）转给用户；失败时在话题里说明原因。"""
     messages = [update.effective_message for update in updates]
     first_message = messages[0]
     user = await db.get_user_by_thread_id(first_message.message_thread_id)
@@ -69,9 +67,6 @@ async def _handle_admin_messages(updates, context: ContextTypes.DEFAULT_TYPE):
     except Exception as error:
         logger.warning("回复用户 %s 失败: %s", user["user_id"], error)
         await _notify_in_topic(context, first_message, _describe_send_error(error))
-        return
-
-    await _mark_delivered(context, first_message)
 
 
 def _describe_send_error(error: Exception) -> str:
@@ -99,18 +94,6 @@ async def _notify_in_topic(context, message, text: str):
         )
     except Exception:
         logger.exception("在话题里发送失败提示时出错")
-
-
-async def _mark_delivered(context, message):
-    """送达标记。群里禁用了这个表情等情况会失败，忽略即可。"""
-    try:
-        await context.bot.set_message_reaction(
-            chat_id=message.chat_id,
-            message_id=message.message_id,
-            reaction=[ReactionTypeEmoji(DELIVERED_REACTION)],
-        )
-    except Exception as error:
-        logger.debug("设置送达标记失败: %s", error)
 
 
 async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
